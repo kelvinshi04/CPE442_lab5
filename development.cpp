@@ -6,11 +6,13 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
 #include <opencv2/core/mat.hpp>
+#include <arm_neon.h>
 
 using namespace std;
 using namespace cv;
 
 #define NUM_THREADS 4
+#define MODE 1
 
 struct args{
     Mat *source;
@@ -48,7 +50,7 @@ int main(int argc, char **argv){
 
 
     while (cap.read(src)){
-        flip(src, src, -1);
+        //flip(src, src, -1);
         if (!Mat_init){
             dest.create(src.rows, src.cols, CV_8UC1);
             gray.create(src.rows, src.cols, CV_8UC1);
@@ -70,8 +72,10 @@ int main(int argc, char **argv){
         // ready
         status = 1;
         pthread_barrier_wait(&barrierB);
-        pthread_barrier_wait(&barrierA);
-        imshow("sImage", dest);
+        if (MODE != 1)
+            pthread_barrier_wait(&barrierA);
+        namedWindow("sImage", WINDOW_NORMAL);
+        imshow("sImage", gray);
         waitKey(1);
     }
     status = 0;
@@ -85,7 +89,6 @@ int main(int argc, char **argv){
 }
 
 void* graySobel(void *arg){
-    uint16x8_t ;
     while(true){
         pthread_barrier_wait(&barrierB);
         struct args *arguments = static_cast<struct args*>(arg);
@@ -94,7 +97,7 @@ void* graySobel(void *arg){
         }
 
         vector<Mat> channels;
-        split(*(arguments->source), channels)
+        split(*(arguments->source), channels);
         uint8_t *rowB, *rowG, *rowR;
         uint8x8_t bByte, rByte, gByte, grayByte;
         uint16x8_t bU16, rU16, gU16;
@@ -109,28 +112,25 @@ void* graySobel(void *arg){
             uchar *gCurr = arguments->gray->ptr<uchar>(r);
             for (int c = 0; c < arguments->source->cols; c+=8){
                 if (arguments->source->cols - c < 8){
-                    bByte = vld1_u8(__transfersize(arguments->source->cols - c) rowB);
-                    rByte = vld1_u8(__transfersize(arguments->source->cols - c) rowR);
-                    gByte = vld1_u8(__transfersize(arguments->source->cols - c) rowG);
+                    c -= arguments->source->cols % 8;
                 }
-                else{
-                    // get bytes
-                    bByte = vld1_u8(__transfersize(8) rowB);
-                    rByte = vld1_u8(__transfersize(8) rowR);
-                    gByte = vld1_u8(__transfersize(8) rowG);
-                }
+                bByte = vld1_u8(rowB + c);
+                rByte = vld1_u8(rowR + c);
+                gByte = vld1_u8(rowG + c);
+
+
                 // change size to uint16x8_t
                 bU16 = vmovl_u8(bByte);
                 gU16 = vmovl_u8(gByte);
                 rU16 = vmovl_u8(rByte);
 
                 // split and convert to 2 vectors of 32x4 for floating point compatibility
-                bUp32f = vcvtq_f32_u32(vget_high_u16(bByte));
-                bLo32f = vcvtq_f32_u32(vget_low_u16(bByte));
-                gUp32f = vcvtq_f32_u32(vget_high_u16(gByte));
-                gLo32f = vcvtq_f32_u32(vget_low_u16(gByte));
-                rUp32f = vcvtq_f32_u32(vget_high_u16(rByte));
-                rLo32f = vcvtq_f32_u32(vget_low_u16(rByte));
+                bUp32f = vcvtq_f32_u32(vmovl_u16(vget_high_u16(bU16)));
+                bLo32f = vcvtq_f32_u32(vmovl_u16(vget_low_u16(bU16)));
+                gUp32f = vcvtq_f32_u32(vmovl_u16(vget_high_u16(gU16)));
+                gLo32f = vcvtq_f32_u32(vmovl_u16(vget_low_u16(gU16)));
+                rUp32f = vcvtq_f32_u32(vmovl_u16(vget_high_u16(rU16)));
+                rLo32f = vcvtq_f32_u32(vmovl_u16(vget_low_u16(rU16)));
 
                 // multiply by floating point
                 bUp32f = vmulq_n_f32(bUp32f, 0.0722f);
@@ -139,6 +139,8 @@ void* graySobel(void *arg){
                 gLo32f = vmulq_n_f32(gLo32f, 0.7152f);
                 rUp32f = vmulq_n_f32(rUp32f, 0.2126f);
                 rLo32f = vmulq_n_f32(rLo32f, 0.2126f);
+
+                
 
                 // convert back to unsigned int
                 bUp32u = vcvtq_u32_f32(bUp32f);
@@ -159,19 +161,15 @@ void* graySobel(void *arg){
                 rByte = vqmovn_u16(rU16);
 
                 // add up values + store
-                grayByte = vadd_s8(vadd_s8(bByte, gByte), rByte);
-                if (arguments->source->cols - c < 8){
-                    vst1_u8(__transfersize(arguments->source->cols - c) gCurr+c, grayByte);
-                }    
-                else{
-                    vst1_u8(__transfersize(8) gCurr+c, grayByte);
-                }
+                grayByte = vadd_u8(vadd_u8(bByte, gByte), rByte);
+                vst1_u8(gCurr+c, grayByte);
+
             }
         }
-    }
     pthread_barrier_wait(&barrierC);
-
-    // sobel filter
+    
+    if (MODE != 1){
+        // sobel filter
     int16_t xTotal, yTotal, g11, g12, g13, g21, g23, g31, g32, g33, total;
     for (int r = arguments->startIndex; r < arguments->endIndex; r++){
         uchar *tRow, *mRow, *bRow, *sRow;
@@ -212,4 +210,6 @@ void* graySobel(void *arg){
         }
     }
     pthread_barrier_wait(&barrierA);
+    }
+    }
 }
