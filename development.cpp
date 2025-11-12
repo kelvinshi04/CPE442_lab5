@@ -101,9 +101,7 @@ void* graySobel(void *arg){
         split(*(arguments->source), channels);
         uint8_t *rowB, *rowG, *rowR;
         uint8x8_t bByte, rByte, gByte, grayByte;
-        uint16x8_t bU16, rU16, gU16;
-        float32x4_t bUp32f, gUp32f, rUp32f, bLo32f, gLo32f, rLo32f;
-        uint32x4_t bUp32u, gUp32u, rUp32u, bLo32u, gLo32u, rLo32u;
+        uint16x8_t bU16, rU16, gU16, bU16_scaled, rU16_scaled, gU16_scaled;
 
         // grayscale
         for (int r = arguments->startIndex; r < arguments->endIndex; r++){ 
@@ -125,40 +123,14 @@ void* graySobel(void *arg){
                 gU16 = vmovl_u8(gByte);
                 rU16 = vmovl_u8(rByte);
 
-                // split and convert to 2 vectors of 32x4 for floating point compatibility
-                bUp32f = vcvtq_f32_u32(vmovl_u16(vget_high_u16(bU16)));
-                bLo32f = vcvtq_f32_u32(vmovl_u16(vget_low_u16(bU16)));
-                gUp32f = vcvtq_f32_u32(vmovl_u16(vget_high_u16(gU16)));
-                gLo32f = vcvtq_f32_u32(vmovl_u16(vget_low_u16(gU16)));
-                rUp32f = vcvtq_f32_u32(vmovl_u16(vget_high_u16(rU16)));
-                rLo32f = vcvtq_f32_u32(vmovl_u16(vget_low_u16(rU16)));
-
-                // multiply by floating point
-                bUp32f = vmulq_n_f32(bUp32f, 0.0722f);
-                bLo32f = vmulq_n_f32(bLo32f, 0.0722f);
-                gUp32f = vmulq_n_f32(gUp32f, 0.7152f);
-                gLo32f = vmulq_n_f32(gLo32f, 0.7152f);
-                rUp32f = vmulq_n_f32(rUp32f, 0.2126f);
-                rLo32f = vmulq_n_f32(rLo32f, 0.2126f);
-                
-
-                // convert back to unsigned int
-                bUp32u = vcvtq_u32_f32(bUp32f);
-                bLo32u = vcvtq_u32_f32(bLo32f);
-                gUp32u = vcvtq_u32_f32(gUp32f);
-                gLo32u = vcvtq_u32_f32(gLo32f);
-                rUp32u = vcvtq_u32_f32(rUp32f);
-                rLo32u = vcvtq_u32_f32(rLo32f);
-
-                // combine back to 16x8 vector
-                bU16 = vcombine_u16(vqmovn_u32(bLo32u), vqmovn_u32(bUp32u));
-                gU16 = vcombine_u16(vqmovn_u32(gLo32u), vqmovn_u32(gUp32u));
-                rU16 = vcombine_u16(vqmovn_u32(rLo32u), vqmovn_u32(rUp32u));
+                bU16_scaled = vshrq_n_u16(vmulq_n_u16(bU16, 18), 8);
+                gU16_scaled = vshrq_n_u16(vmulq_n_u16(gU16, 183), 8);
+                rU16_scaled = vshrq_n_u16(vmulq_n_u16(gU16, 54), 8);
 
                 // convert to original 8x8 vector format
-                bByte = vqmovn_u16(bU16);
-                gByte = vqmovn_u16(gU16);
-                rByte = vqmovn_u16(rU16);
+                bByte = vqmovn_u16(bU16_scaled);
+                gByte = vqmovn_u16(gU16_scaled);
+                rByte = vqmovn_u16(rU16_scaled);
 
                 // add up values + store
                 grayByte = vadd_u8(vadd_u8(bByte, gByte), rByte);
