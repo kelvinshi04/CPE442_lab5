@@ -73,7 +73,7 @@ int main(int argc, char **argv){
         pthread_barrier_wait(&barrierB);
         pthread_barrier_wait(&barrierA);
         namedWindow("sImage", WINDOW_NORMAL);
-        imshow("sImage", gray);
+        imshow("sImage", dest);
         waitKey(1);
     }
     status = 0;
