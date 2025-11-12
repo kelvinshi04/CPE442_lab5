@@ -12,7 +12,6 @@ using namespace std;
 using namespace cv;
 
 #define NUM_THREADS 4
-#define MODE 0
 
 struct args{
     Mat *source;
@@ -72,11 +71,9 @@ int main(int argc, char **argv){
         // ready
         status = 1;
         pthread_barrier_wait(&barrierB);
-        if (MODE != 1){
         pthread_barrier_wait(&barrierA);
-        }
         namedWindow("sImage", WINDOW_NORMAL);
-        imshow("sImage", dest);
+        imshow("sImage", gray);
         waitKey(1);
     }
     status = 0;
@@ -111,12 +108,11 @@ void* graySobel(void *arg){
             uchar *gCurr = arguments->gray->ptr<uchar>(r);
             for (int c = 0; c < arguments->source->cols; c+=8){
                 if (arguments->source->cols - c < 8){
-                    c -= arguments->source->cols % 8;
+                    c = arguments->source->cols - 8;
                 }
                 bByte = vld1_u8(rowB + c);
                 rByte = vld1_u8(rowR + c);
                 gByte = vld1_u8(rowG + c);
-
 
                 // change size to uint16x8_t
                 bU16 = vmovl_u8(bByte);
@@ -125,7 +121,7 @@ void* graySobel(void *arg){
 
                 bU16_scaled = vshrq_n_u16(vmulq_n_u16(bU16, 18), 8);
                 gU16_scaled = vshrq_n_u16(vmulq_n_u16(gU16, 183), 8);
-                rU16_scaled = vshrq_n_u16(vmulq_n_u16(gU16, 54), 8);
+                rU16_scaled = vshrq_n_u16(vmulq_n_u16(rU16, 54), 8);
 
                 // convert to original 8x8 vector format
                 bByte = vqmovn_u16(bU16_scaled);
@@ -140,7 +136,6 @@ void* graySobel(void *arg){
         }
         pthread_barrier_wait(&barrierC);
         
-        if (MODE != 1){
         // sobel filter
         /*
         IMPLEMENTATION:
@@ -239,6 +234,5 @@ void* graySobel(void *arg){
             }
         }
     pthread_barrier_wait(&barrierA);
-        }
     }
 }
