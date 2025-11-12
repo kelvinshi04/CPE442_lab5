@@ -12,7 +12,6 @@ using namespace std;
 using namespace cv;
 
 #define NUM_THREADS 4
-#define MODE 1
 
 struct args{
     Mat *source;
@@ -72,10 +71,9 @@ int main(int argc, char **argv){
         // ready
         status = 1;
         pthread_barrier_wait(&barrierB);
-        if (MODE != 1)
-            pthread_barrier_wait(&barrierA);
+        pthread_barrier_wait(&barrierA);
         namedWindow("sImage", WINDOW_NORMAL);
-        imshow("sImage", gray);
+        imshow("sImage", dest);
         waitKey(1);
     }
     status = 0;
@@ -139,7 +137,6 @@ void* graySobel(void *arg){
                 gLo32f = vmulq_n_f32(gLo32f, 0.7152f);
                 rUp32f = vmulq_n_f32(rUp32f, 0.2126f);
                 rLo32f = vmulq_n_f32(rLo32f, 0.2126f);
-
                 
 
                 // convert back to unsigned int
@@ -166,50 +163,105 @@ void* graySobel(void *arg){
 
             }
         }
-    pthread_barrier_wait(&barrierC);
+        pthread_barrier_wait(&barrierC);
     
-    if (MODE != 1){
         // sobel filter
-    int16_t xTotal, yTotal, g11, g12, g13, g21, g23, g31, g32, g33, total;
-    for (int r = arguments->startIndex; r < arguments->endIndex; r++){
-        uchar *tRow, *mRow, *bRow, *sRow;
-        if ((r-1) < 0)
-            tRow = NULL;
-        else 
-            tRow = arguments->gray->ptr<uchar>(r-1);
+        /*
+        IMPLEMENTATION:
+
+            Set Edge Column to Greyscale
+            Check for last row if so move backwards // NOT WORKING: gives white line
+            Grab 8 vectors at a time starting at seconnd column in
+            changes size then scales
+            Set First Column of next 3 vectors to be Second to last element of previous vectors
+            Perform sobel on each element except for first and last
+            repeat until last case
+
+            When reach the end, push vector back like grayscale and sobel
+
+
+        */
         
-        if ((r+1) > arguments->gray->rows-1)
-            bRow = NULL;
-        else 
-            bRow = arguments->gray->ptr<uchar>(r+1);
-        mRow = arguments->gray->ptr<uchar>(r);
-        sRow = arguments->dest->ptr<uchar>(r);
+        uint8_t *rowT, *rowM, *rowL, *rowS;
+        uint8x8_t tByte, g11Byte, g12Byte, g13Byte, g21Byte, g23Byte, g31Byte, g32Byte, g33Byte;
+        int16x8_t t16, x16, y16, g11, g12, g13, g21, g23, g31, g32, g33, g11_scaled, g12_scaled, 
+                g13_scaled, g21_scaled, g23_scaled, g31_scaled, g32_scaled, g33_scaled;
 
-        for (int c = 0; c < arguments->source->cols; c++){
-            // just perform grayscale on edge cases
-            if (tRow == NULL || bRow == NULL || c == 0 || c == arguments->source->cols-1){
-                continue;
+        for (int r = arguments->startIndex; r < arguments->endIndex; r++){
+            if ((r-1) < 0){
+                rowT = NULL;
+            }else{
+                rowT = arguments->gray->ptr<uint8_t>(r-1);
             }
-            else{
-                g11 = tRow[c-1];
-                g12 = tRow[c];
-                g13 = tRow[c+1];
-                g21 = mRow[c-1];
-                g23 = mRow[c+1];
-                g31 = bRow[c-1];
-                g32 = bRow[c];
-                g33 = bRow[c+1];
+            
+            if ((r+1) > arguments->gray->rows-1){ 
+                rowL = NULL;
+            }else{ 
+                rowL = arguments->gray->ptr<uint8_t>(r+1);
+            }
 
-                xTotal = -g11 + g13 - g21*2 + g23*2 - g31 + g33;
-                yTotal = g11 + g12*2 + g13 - g31 - g32*2 - g33;
+            rowM = arguments->gray->ptr<uint8_t>(r);
+            rowS = arguments->dest->ptr<uint8_t>(r);
+            
+            // Set Border Column to Greyscale
+            rowS[0] = rowM[0];
 
-                total = abs(xTotal) + abs(yTotal);
-                total = (total > 255) ? 255 : ((total < 0) ? 0 : total);
-                sRow[c] = total;
+            // Set each new vector to second to last element of previous
+            for (int c = 1; c < arguments->source->cols; c+=8){
+                // Account for first & last row
+                // video is 2159 pixels  
+                if (arguments->source->cols - c < 8){
+                        c -= arguments->source->cols % 8;
+                }
+                
+                // EDIT: continue function creates a row of all 0s at top and bottom
+                if (rowT == NULL || rowL == NULL){
+                    vst1_u8(rowS + c, vld1_u8(rowM + c));
+                }else{
+                    g11Byte = vld1_u8(rowT + c - 1);
+                    g12Byte = vld1_u8(rowT + c);
+                    g13Byte = vld1_u8(rowT + c + 1);
+                    g21Byte = vld1_u8(rowM + c - 1);
+                    g23Byte = vld1_u8(rowM + c + 1);
+                    g31Byte = vld1_u8(rowL + c - 1);
+                    g32Byte = vld1_u8(rowL + c);
+                    g33Byte = vld1_u8(rowL + c + 1);
+
+
+                    // change size to uint16x8_t then to int16x8_t
+                    g11 = vreinterpretq_s16_u16(vmovl_u8(g11Byte));
+                    g12 = vreinterpretq_s16_u16(vmovl_u8(g12Byte));
+                    g13 = vreinterpretq_s16_u16(vmovl_u8(g13Byte));
+                    g21 = vreinterpretq_s16_u16(vmovl_u8(g21Byte));
+                    g23 = vreinterpretq_s16_u16(vmovl_u8(g23Byte));
+                    g31 = vreinterpretq_s16_u16(vmovl_u8(g31Byte));
+                    g32 = vreinterpretq_s16_u16(vmovl_u8(g32Byte));
+                    g33 = vreinterpretq_s16_u16(vmovl_u8(g33Byte));
+
+                    
+                    // scale by 2 or -1 for kernels
+                    // doing it this way is faster than multq
+                    g11_scaled = vnegq_s16(g11);
+                    g12_scaled = vshlq_n_s16(g12, 1);
+                    g13_scaled = vnegq_s16(g13);
+                    g21_scaled = vnegq_s16(vshlq_n_s16(g21, 1));
+                    g23_scaled = vshlq_n_s16(g23, 1);
+                    g31_scaled = vnegq_s16(g31);
+                    g32_scaled = vnegq_s16(vshlq_n_s16(g32, 1));
+                    g33_scaled = vnegq_s16(g33);
+
+                    // Calculate Gx and Gy and total
+                    x16 = vaddq_s16(g11_scaled, vaddq_s16(g13, vaddq_s16(g21_scaled, vaddq_s16(g23_scaled, vaddq_s16(g31_scaled, g33)))));
+                    y16 = vaddq_s16(g11, vaddq_s16(g12_scaled, vaddq_s16(g13, vaddq_s16(g31_scaled, vaddq_s16(g32_scaled, g33_scaled)))));
+                    t16 = vaddq_s16(vabsq_s16(x16), vabsq_s16(y16));
+
+                    // Convert back to original 8x8, vqmovn handles overflow 
+                    // Potential error: does vreinterpretq handle negative nums?, would it even need to becos of vabsq or vaddq?
+                    tByte = vqmovn_u16(vreinterpretq_u16_s16(t16));
+                    vst1_u8(rowS + c, tByte);
+                }
             }
         }
-    }
     pthread_barrier_wait(&barrierA);
-    }
     }
 }
