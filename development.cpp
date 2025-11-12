@@ -12,6 +12,7 @@ using namespace std;
 using namespace cv;
 
 #define NUM_THREADS 4
+#define MODE 0
 
 struct args{
     Mat *source;
@@ -71,7 +72,9 @@ int main(int argc, char **argv){
         // ready
         status = 1;
         pthread_barrier_wait(&barrierB);
+        if (MODE != 1){
         pthread_barrier_wait(&barrierA);
+        }
         namedWindow("sImage", WINDOW_NORMAL);
         imshow("sImage", dest);
         waitKey(1);
@@ -148,9 +151,9 @@ void* graySobel(void *arg){
                 rLo32u = vcvtq_u32_f32(rLo32f);
 
                 // combine back to 16x8 vector
-                bU16 = vcombine_u16(vqmovn_u32(bUp32u), vqmovn_u32(bLo32u));
-                gU16 = vcombine_u16(vqmovn_u32(gUp32u), vqmovn_u32(gLo32u));
-                rU16 = vcombine_u16(vqmovn_u32(rUp32u), vqmovn_u32(rLo32u));
+                bU16 = vcombine_u16(vqmovn_u32(bLo32u), vqmovn_u32(bUp32u));
+                gU16 = vcombine_u16(vqmovn_u32(gLo32u), vqmovn_u32(gUp32u));
+                rU16 = vcombine_u16(vqmovn_u32(rLo32u), vqmovn_u32(rUp32u));
 
                 // convert to original 8x8 vector format
                 bByte = vqmovn_u16(bU16);
@@ -164,7 +167,8 @@ void* graySobel(void *arg){
             }
         }
         pthread_barrier_wait(&barrierC);
-    
+        
+        if (MODE != 1){
         // sobel filter
         /*
         IMPLEMENTATION:
@@ -173,8 +177,8 @@ void* graySobel(void *arg){
             Check for last row if so move backwards // NOT WORKING: gives white line
             Grab 8 vectors at a time starting at seconnd column in
             changes size then scales
-            Set First Column of next 3 vectors to be Second to last element of previous vectors
-            Perform sobel on each element except for first and last
+            calculate Gx and Gy
+            Sum then size change and then store
             repeat until last case
 
             When reach the end, push vector back like grayscale and sobel
@@ -185,7 +189,7 @@ void* graySobel(void *arg){
         uint8_t *rowT, *rowM, *rowL, *rowS;
         uint8x8_t tByte, g11Byte, g12Byte, g13Byte, g21Byte, g23Byte, g31Byte, g32Byte, g33Byte;
         int16x8_t t16, x16, y16, g11, g12, g13, g21, g23, g31, g32, g33, g11_scaled, g12_scaled, 
-                g13_scaled, g21_scaled, g23_scaled, g31_scaled, g32_scaled, g33_scaled;
+                 g21_scaled, g23_scaled, g31_scaled, g32_scaled, g33_scaled;
 
         for (int r = arguments->startIndex; r < arguments->endIndex; r++){
             if ((r-1) < 0){
@@ -205,16 +209,17 @@ void* graySobel(void *arg){
             
             // Set Border Column to Greyscale
             rowS[0] = rowM[0];
+            rowS[arguments->source->cols] = rowM[arguments->source->cols];
+            
+            for (int c = 1; c < arguments->source->cols - 1; c+=8){
 
-            // Set each new vector to second to last element of previous
-            for (int c = 1; c < arguments->source->cols; c+=8){
-                // Account for first & last row
                 // video is 2159 pixels  
                 if (arguments->source->cols - c < 8){
-                        c -= arguments->source->cols % 8;
+                        c = arguments->source->cols - 9;
                 }
                 
-                // EDIT: continue function creates a row of all 0s at top and bottom
+                // Account for first & last row
+                // EDIT: continue function creates a row of all 0s at top and bottom, therefore we opt for 
                 if (rowT == NULL || rowL == NULL){
                     vst1_u8(rowS + c, vld1_u8(rowM + c));
                 }else{
@@ -243,7 +248,6 @@ void* graySobel(void *arg){
                     // doing it this way is faster than multq
                     g11_scaled = vnegq_s16(g11);
                     g12_scaled = vshlq_n_s16(g12, 1);
-                    g13_scaled = vnegq_s16(g13);
                     g21_scaled = vnegq_s16(vshlq_n_s16(g21, 1));
                     g23_scaled = vshlq_n_s16(g23, 1);
                     g31_scaled = vnegq_s16(g31);
@@ -263,5 +267,6 @@ void* graySobel(void *arg){
             }
         }
     pthread_barrier_wait(&barrierA);
+        }
     }
 }
